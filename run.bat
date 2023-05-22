@@ -1,0 +1,1 @@
+wt py ".\new_games.py"
