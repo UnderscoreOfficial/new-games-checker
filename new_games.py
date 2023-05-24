@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord.embeds import Embed
 from dotenv import load_dotenv
 import nest_asyncio
@@ -133,7 +133,11 @@ async def getGameData(games):
                         data[0].update({"release_date": "TBD", "human": "TBD", "platform": dates["platform"]})
                 except KeyError:
                     data[0].pop("release_dates", None)
-                    data[0].update({"release_date": "TBD", "human": "TBD", "platform": dates["platform"]})
+                    try:
+                        platform = data[0]["platform"]
+                    except Exception:
+                        platform = None
+                    data[0].update({"release_date": "TBD", "human": "TBD", "platform": platform})
 
                 formatted_game_data.append(*data)
             else:
@@ -183,7 +187,7 @@ async def checkGames(discord, released, show_all):
             checked_games_tba.append(game)
             continue
 
-        base_formatted_time = datetime.fromtimestamp(int(game["release_date"]))
+        base_formatted_time = datetime.fromtimestamp(float(game["release_date"]))
 
         # setting timezone
         if timezone[1] == "-":
@@ -361,8 +365,8 @@ async def addGame(discord, id, platform, date, custom_date):
         for data in game_data:
             # if game does not exist game is added to the database
             if database_game == None:
-                cursor.execute("INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
-                               (int(id), data["name"], data["summary"], date, custom_date, data["url"], data["cover_url"], platform))
+                cursor.execute("INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                               (int(id), data["name"], data["summary"], date, custom_date, data["url"], data["cover_url"], platform, None))
                 connect.commit()
 
                 await discord.send(f">>> {data['name']} has been added")
@@ -564,5 +568,64 @@ async def clear(interaction: discord.Interaction, all_games: bool = False):
         msg = ">>> checking for games..."
     await interaction.response.send_message(msg)
     asyncio.run(checkGames(interaction.channel, False, all_games))
+
+def updateLastCheckedDate(id, cursor, last_checked):
+    game, count = asyncio.run(getGameData([id]))
+    cursor.execute("UPDATE games Set last_checked = ? WHERE id = ?", (last_checked, game[0]["id"]))
+
+@tasks.loop(hours=24)
+async def updateGames():
+    connect = sqlite3.connect("games.db")
+    connect.row_factory = sqlite3.Row
+    cursor = connect.cursor()
+    cursor.execute("SELECT * FROM games")
+    all_games = [dict(row) for row in cursor.fetchall()]
+    now = datetime.now()
+
+    for game in all_games:
+
+        if game["last_checked"] == None:
+            days_since_checked = 400 
+        else:
+            last_checked = datetime.fromtimestamp(float(game["last_checked"]))
+            days_since_checked = last_checked.day-now.day
+
+        if game["release_date"] == "TBD":
+            if game["last_checked"] == None or days_since_checked >= 30:
+                print(f"{game['name']} - TBD (Updated)")
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
+            continue
+
+        release_date = datetime.fromtimestamp(float(game["release_date"]))
+        days = (release_date-now).days
+
+        print_msg = f"{game['name']} - {days} Days (Updated)"
+
+        if days < 0:
+            pass
+        elif days < 1 and days_since_checked >= 1:
+            print(print_msg)
+            updateLastCheckedDate(game["id"], cursor, now.timestamp())
+        elif days < 6 and days % 2 == 0 and days != 0 and days_since_checked >= 2:
+            print(print_msg)
+            updateLastCheckedDate(game["id"], cursor, now.timestamp())
+        elif days < 8 and days_since_checked >= 8:
+            print(print_msg)
+            updateLastCheckedDate(game["id"], cursor, now.timestamp())
+        elif days < 16 and days_since_checked >= 14:
+            print(print_msg)
+            updateLastCheckedDate(game["id"], cursor, now.timestamp())
+        elif days < 30 and days_since_checked >= 152:
+            print(print_msg)
+            updateLastCheckedDate(game["id"], cursor, now.timestamp())
+        elif days < 182 and days_since_checked >= 183:
+            print(print_msg)
+            updateLastCheckedDate(game["id"], cursor, now.timestamp())
+        elif days < 365 and game["last_checked"] == None or days < 365 and float(game["last_checked"]) != 946684800:
+            print(print_msg)
+            updateLastCheckedDate(game["id"], cursor, 946684800)
+
+    connect.commit()
+    connect.close()
 
 bot.run(token)
