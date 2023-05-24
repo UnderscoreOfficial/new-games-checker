@@ -61,138 +61,129 @@ def twitchAuthentication():
 
     return login_request.json()["access_token"]
 
+# gets twitch access token
+access_token = twitchAuthentication()
+
 
 # makes request to igdb for a game
-def getGameFromIgdb(id, access_token, client=None):
+def getGameFromIgdb(id, client):
     igdb_header = {
         "Client-ID": twitch_client_id,
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json"
     }
-    igdb_data = f"fields name, release_dates.*, url; limit 500; where id={id};"
 
-    if client == None:
-        igdb_post = requests.post(
-            "https://api.igdb.com/v4/games/", headers=igdb_header, data=igdb_data)
-    else:
-        igdb_post = client.post(
-            "https://api.igdb.com/v4/games", headers=igdb_header, data=igdb_data)
+    igdb_data = f"fields name, url, summary, release_dates.*; limit 500; where id={id};"
+    igdb_data_cover = f"fields url; limit 500; where game={id};"
 
-    return igdb_post
+    igdb_post = client.post("https://api.igdb.com/v4/games/", headers=igdb_header, data=igdb_data)
+    igdb_post_cover = client.post("https://api.igdb.com/v4/covers/", headers=igdb_header, data=igdb_data_cover)
+
+    return igdb_post, igdb_post_cover
 
 
-def filterIgdbGameResponsesByPlatform(igdb_post):
-    igdb_final_game_data = []
-    for game_data in igdb_post:
-        try:
-            for date_data in game_data["release_dates"]:
-                if date_data["platform"] == game_platform and date_data["region"] in region:
-                    try:
-                        date = date_data["date"]
-                    except:
-                        date = "TBD"
-                    igdb_final_game_data.extend([{
-                        "name": game_data["name"],
-                        "id": game_data["id"],
-                        "platform": date_data["platform"],
-                        "region": date_data["region"],
-                        "release_date": date,
-                        "human": date_data["human"],
-                        "url": game_data["url"]}])
-        except:
-            igdb_final_game_data.extend([{
-                "name": game_data["name"],
-                "id": game_data["id"],
-                "platform": date_data["platform"],
-                "region": date_data["region"],
-                "release_date": "TBD",
-                "human": "TBD",
-                "url": game_data["url"]}])
-
-    return igdb_final_game_data
-
-
-async def getMultipleGamesFromIgdb():
-
-    # gets twitch access token
-    access_token = twitchAuthentication()
-
-    # reads all games in database
-    connect = sqlite3.connect("games.db")
-    cursor = connect.cursor()
-    cursor.execute("SELECT * FROM games")
-    all_games_in_database = cursor.fetchall()
-
-    valid_igdb_games = []
+async def getGameData(games):
+    valid_games = []
+    has_messages = False
     count = 0
 
-    # will keep checking games until all are valid (not that great of a solution but works to recheck games when api rate limits)
-    while count == 0 or 'message' in igdb_game_list:
-
-        gather_games = []
+    while count == 0 or has_messages == True:
+        game_request_objects = []
+        has_messages = False
 
         if count == 0:
             first_run = True
         else:
             first_run = False
-            game_ids = [igdb_game["id"] for igdb_game in valid_igdb_games]
-
-        # using httpx and async to gather all the requests and run once all are gathered
+            game_ids = [game["id"] for game in valid_games]
         async with httpx.AsyncClient() as client:
-            for game in all_games_in_database:
-                if first_run == True or game[1] not in game_ids:
-                    gather_games.append(getGameFromIgdb(
-                        game[1], access_token, client))
-            igdb_completed_requests = [game.json() for game in await asyncio.gather(*gather_games)]
+            for game in games:
+                if first_run == True or game not in game_ids:
+                    game_request_objects.append(getGameFromIgdb(game, client))
 
-        igdb_game_list = []
+            game_requests = [await asyncio.gather(*i) for i in game_request_objects]
+
+        # formatting dictionary / data
+        formatted_game_data = []
+        for items in game_requests:
+            data = [*items[0].json()]
+            cover = [*items[1].json()]
+            if data[0] != "message" and cover[0] != "message":
+                try:
+                    data[0]["summary"] = str(data[0]["summary"][:str(data[0]["summary"]).rfind(" ", 0, 200)] + "...").replace("\n\n", " ")
+                except KeyError:
+                    data[0]["summary"] = None
+
+                fixed_cover_url = str(items[1].json()[0]["url"]).replace("//", "https://").replace("t_thumb", "t_cover_big")
+                data[0].update({"cover_url": fixed_cover_url})
+
+                try:
+                    no_dates = False
+                    for dates in data[0]["release_dates"]:
+                        if dates["platform"] == game_platform and dates["region"] in region:
+                            no_dates = True
+                            try:
+                                data[0].update({"release_date": dates["date"], "human": dates["human"], "platform": dates["platform"]})
+                            except Exception:
+                                data[0].update({"release_date": "TBD", "human": "TBD", "platform": dates["platform"]})
+                            data[0].pop("release_dates", None)
+
+                    if no_dates == False:
+                        data[0].pop("release_dates", None)
+                        data[0].update({"release_date": "TBD", "human": "TBD", "platform": dates["platform"]})
+                except KeyError:
+                    data[0].pop("release_dates", None)
+                    data[0].update({"release_date": "TBD", "human": "TBD", "platform": dates["platform"]})
+
+                formatted_game_data.append(*data)
+            else:
+                formatted_game_data.append("message")
 
         # checking if games got rate limited
-        for item in igdb_completed_requests:
-            for game in item:
-                igdb_game_list.append(game)
-                if game == "message":
-                    continue
-                else:
-                    valid_igdb_games.append(game)
-                    if first_run == True:
-                        count += 1
-
-        # formatting list keeping only platform release date
-        final_games_results = filterIgdbGameResponsesByPlatform(
-            valid_igdb_games)
-
-    connect.close()
-    return final_games_results, count
+        for game in formatted_game_data:
+            if game == "message":
+                has_messages = True
+                continue
+            else:
+                valid_games.append(game)
+                if first_run == True:
+                    count += 1
+    
+    return valid_games, count
 
 
 # checks if games in database are going to release within the next 30 days
 async def checkGames(discord, released, show_all):
 
     # reads all games in database
+
     connect = sqlite3.connect("games.db")
+    connect.row_factory = sqlite3.Row
     cursor = connect.cursor()
     cursor.execute("SELECT * FROM games")
-    all_games_in_database = cursor.fetchall()
+    all_games = [dict(row) for row in cursor.fetchall()]
 
     count = 0
     game_messages = 0
 
+    # wtf are these names
     checked_games = []
+    # I think this means games coming out in this month ffs
     checked_games_month = []
     checked_games_tba = []
 
     # checking games release dates
-    for database_game in all_games_in_database:
-        # COME BACK TO THIS COUNT
+    for game in all_games:
+
+        # COME BACK TO THIS COUNT (follow up idk why I said to come back here?)
         count += 1
 
         # checking if game is TBA
-        if database_game[2] == "0000-00-00 00:00:00":
-            checked_games_tba.append(database_game)
+        if game["release_date"] == "TBD":
+            checked_games_tba.append(game)
             continue
 
-        base_formatted_time = (datetime.strptime(database_game[2], "%Y-%m-%d %H:%M:%S"))
+        base_formatted_time = datetime.fromtimestamp(int(game["release_date"]))
 
         # setting timezone
         if timezone[1] == "-":
@@ -218,21 +209,22 @@ async def checkGames(discord, released, show_all):
 
             game_messages += 1
 
-            print(f'{database_game[0]} Game is out T{final_formatted_time}')
-            url_encoded_name = re.sub(r'[^a-z0-9\s]', '', str(database_game[0]).lower().strip()).replace(" ", "+")
-            igdb_url = "https://images.igdb.com/igdb/image/upload/t_cover_big/co5xex.jpg"
+            print(f'{game["name"]} Game is out T{final_formatted_time}')
+
+            # creating release urls
+            url_encoded_name = re.sub(r'[^a-z0-9\s]', '', str(game["name"]).lower().strip()).replace(" ", "+")
             cs_rin_url = f"https://cs.rin.ru/forum/search.php?st=0&sk=t&sd=d&sr=topics&keywords={url_encoded_name}&terms=any&fid%5B%5D=10&sf=titleonly"
 
             embeds = []
 
-            csrin_embed = Embed(color=0x505050, title="CS.RIN.RU - The Last of Us Part I", url=f"{cs_rin_url}")
+            csrin_embed = Embed(color=0x505050, title=f"CS.RIN.RU - {game['name']}", url=f"{cs_rin_url}")
             embeds.append(csrin_embed)
 
-            igdb_embed = Embed(color=0x9147ff, title="The Last of Us Part I", url="https://www.igdb.com/games/the-last-of-us-part-i" ,description="Experience the emotional storytelling and unforgettable characters of Joel and Ellie in The Last of Us, winner of over 200 Game of the Year awards and now rebuilt for PlayStation 5.")
-            igdb_embed.set_thumbnail(url=igdb_url)
+            igdb_embed = Embed(color=0x9147ff, title=game["name"], url=game["url"] ,description=game["summary"])
+            igdb_embed.set_thumbnail(url=game["cover_url"])
             embeds.append(igdb_embed)
 
-            await discord.send(content=f">>> **{database_game[0]}** is out! :partying_face: T{final_formatted_time} ||{database_game[1]}||", embeds=embeds)
+            await discord.send(content=f">>> **{game['name']}** is out! :partying_face: T{final_formatted_time} ||{game['id']}||", embeds=embeds)
 
         # comparing time now to game release time for games that have not released
         elif (game_release_time-timedelta(days=30)) <= current_time and released == False:
@@ -253,63 +245,63 @@ async def checkGames(discord, released, show_all):
                 final_formatted_time = (datetime.strptime(
                     time_left, "%H:%M:%S.%f")).strftime("X%M minutes").replace("X0", "").replace("X", "")
                 checked_games.append(
-                    {"time": final_formatted_time, "game": database_game, "style": style})
+                    {"time": final_formatted_time, "game": game, "style": style})
 
             elif time_left.split(":")[1] == "0":
                 final_formatted_time = (datetime.strptime(
                     time_left, "%H:%M:%S.%f")).strftime("X%H Hours").replace("X0", "").replace("X", "")
                 checked_games.append(
-                    {"time": final_formatted_time, "game": database_game, "style": style})
+                    {"time": final_formatted_time, "game": game, "style": style})
 
             elif ":" in time_left.split(" ")[0]:
                 final_formatted_time = (datetime.strptime(time_left, "%H:%M:%S.%f")).strftime(
                     'X%H Hours, and X%M minutes').replace("X0", "").replace("X", "")
                 checked_games.append(
-                    {"time": final_formatted_time, "game": database_game, "style": style})
+                    {"time": final_formatted_time, "game": game, "style": style})
 
             elif time_left.split(" ")[1] == "day," and (time_left.split(" ")[2]).split(":")[1].startswith("00"):
                 final_formatted_time = (datetime.strptime(time_left, "%d days, %H:%M:%S.%f")).strftime(
                     "X%d Days, and X%M minutes").replace("X0", "").replace("X", "")
                 checked_games.append(
-                    {"time": final_formatted_time, "game": database_game, "style": style})
+                    {"time": final_formatted_time, "game": game, "style": style})
 
             elif time_left.split(" ")[1] == "day,":
                 final_formatted_time = (datetime.strptime(time_left, "%d day, %H:%M:%S.%f")).strftime(
                     "X%d Day, X%H Hours, and X%M minutes").replace("X0", "").replace("X", "")
                 checked_games.append(
-                    {"time": final_formatted_time, "game": database_game, "style": style})
+                    {"time": final_formatted_time, "game": game, "style": style})
 
             elif time_left.split(" ")[1] == "days," and time_left.split(" ")[2].startswith("0"):
                 final_formatted_time = (datetime.strptime(time_left, "%d days, %H:%M:%S.%f")).strftime(
                     "X%d Days, and X%M minutes").replace("X0", "").replace("X", "")
                 checked_games.append(
-                    {"time": final_formatted_time, "game": database_game, "style": style})
+                    {"time": final_formatted_time, "game": game, "style": style})
 
             elif time_left.split(' ')[1] == 'days,':
                 final_formatted_time = (datetime.strptime(time_left, "%d days, %H:%M:%S.%f")).strftime(
                     'X%d Days, X%H Hours, and X%M minutes').replace("X0", "").replace("X", "")
                 checked_games.append(
-                    {"time": final_formatted_time, "game": database_game, "style": style})
+                    {"time": final_formatted_time, "game": game, "style": style})
 
         elif released == False:
             checked_games_month.append(
-                {"time": (game_release_time-current_time).days, "game": database_game})
+                {"time": (game_release_time-current_time).days, "game": game})
 
     checked_games.sort(key=lambda item: item.get("time"))
     checked_games_month.sort(key=lambda item: item.get("time"))
 
     for game in checked_games:
-        print(f"{game['game'][0]} will be out in {game['time']}")
-        await discord.send(f">>> **{game['game'][0]}** will be out in ||{game['game'][1]}|| ```{game['style']} {game['time']}!```")
+        print(f"{game['game']['name']} will be out in {game['time']}")
+        await discord.send(f">>> **{game['game']['name']}** will be out in ||{game['game']['id']}|| ```{game['style']} {game['time']}!```")
     for game in checked_games_month:
         print(
-            f"{game['time']} days until {game['game'][0]} ({game['game'][1]}) is released.")
+            f"{game['time']} days until {game['game']['name']} ({game['game']['id']}) is released.")
         if show_all == True:
-            await discord.send(f">>> **{game['game'][0]}** will be out in ||{game['game'][1]}|| ```css\n{game['time']} days!```")
+            await discord.send(f">>> **{game['game']['name']}** will be out in ||{game['game']['id']}|| ```css\n{game['time']} days!```")
     for game in checked_games_tba:
-        print(f"{game[0]} TBA")
+        print(f"{game['name']} TBA")
         if show_all == True:
-            await discord.send(f">>> **{game[0]}** TBA ||{game[1]}||")
+            await discord.send(f">>> **{game['name']}** TBA ||{game['id']}||")
     connect.close()
 
     if game_messages == 0 and released == True:
@@ -335,8 +327,8 @@ async def removeGame(id, discord):
         # saves database and sending messages
         connect.commit()
 
-        await discord.send(f">>> {database_game[0]} has been removed!")
-        print(f"{database_game[0]} has been removed!")
+        await discord.send(f">>> {database_game[1]} has been removed!")
+        print(f"{database_game[1]} has been removed!")
     else:
         await discord.send(">>> Game does not exist!")
         print("Game does not exist!")
@@ -345,7 +337,7 @@ async def removeGame(id, discord):
 
 
 # adds game to database
-async def addGame(discord, id, platform, date):
+async def addGame(discord, id, platform, date, custom_date):
 
     # checks if database exist, creates one if it does not exist and recalls function
     if os.path.exists("games.db"):
@@ -359,14 +351,18 @@ async def addGame(discord, id, platform, date):
         database_game = cursor.fetchone()
 
         # calling game from igdb to get the name
-        access_token = twitchAuthentication()
-        igdb_game = getGameFromIgdb(id, access_token)
-        for data in igdb_game.json():
+        
+        try:
+            game_data, count = asyncio.run(getGameData([id]))
+        except Exception:
+            await discord.send(f">>> Game does not exist!")
+            print(f"Game does not exist!")
+        
+        for data in game_data:
             # if game does not exist game is added to the database
             if database_game == None:
-                cursor.execute("INSERT INTO games VALUES (?, ?, ?, ?)",
-                               (data["name"], int(id), date, platform))
-
+                cursor.execute("INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
+                               (int(id), data["name"], data["summary"], date, custom_date, data["url"], data["cover_url"], platform))
                 connect.commit()
 
                 await discord.send(f">>> {data['name']} has been added")
@@ -384,9 +380,13 @@ async def addGame(discord, id, platform, date):
 
         # creates table
         c.execute("""CREATE TABLE games (
-                    name text,
                     id integer,
+                    name text,
+                    summary text,
                     datetime text,
+                    custom_date boolean,
+                    url text,
+                    cover_url text,
                     platform integer
                 )""")
 
@@ -431,14 +431,12 @@ async def clear(interaction: discord.Interaction, id: int = None):
         await interaction.response.send_message(">>> https://www.igdb.com/search", ephemeral=True)
     else:
         try:
-            access_token = twitchAuthentication()
-            igdb_response = getGameFromIgdb(id, access_token)
-            igdb_game = filterIgdbGameResponsesByPlatform(igdb_response.json())
-        except Exception as e:
-            print(e)
+            game_data, count = asyncio.run(getGameData([id]))
+        except Exception:
             await interaction.response.send_message(f">>> Game does not exist", ephemeral=True)
+            print(f"Game does not exist!")
         else:
-            await interaction.response.send_message(f">>> {igdb_game[0]['url']}")
+            await interaction.response.send_message(f">>> {game_data[0]['url']}")
 
 
 # gets all available platforms
@@ -539,9 +537,13 @@ async def clear(interaction: discord.Interaction, id: int, platform: str = str(g
         if (any(character.isdigit() for character in datetime) and ":" in datetime and "-" in datetime and len(datetime) == 19) != True:
             await interaction.response.send_message(">>> Invalid datetime format use (YYYY-MM-DD HH:MM:SS)", ephemeral=True)
             return
+        
+    custom_date = False
+    if datetime != "0000-00-00 00:00:00":
+        custom_date = True
 
     await interaction.response.send_message(f">>> Trying to add game...", ephemeral=True)
-    asyncio.run(addGame(interaction.channel, id, int(platform), datetime))
+    asyncio.run(addGame(interaction.channel, id, int(platform), datetime, custom_date))
 
 
 # removes game from database

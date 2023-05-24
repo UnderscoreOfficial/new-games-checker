@@ -1,3 +1,4 @@
 games.db
 .env
 new_games copy.py
+games copy.db
