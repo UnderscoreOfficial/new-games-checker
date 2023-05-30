@@ -61,6 +61,7 @@ def twitchAuthentication():
 
     return login_request.json()["access_token"]
 
+
 # gets twitch access token
 access_token = twitchAuthentication()
 
@@ -110,11 +111,13 @@ async def getGameData(games):
             cover = [*items[1].json()]
             if data[0] != "message" and cover[0] != "message":
                 try:
-                    data[0]["summary"] = str(data[0]["summary"][:str(data[0]["summary"]).rfind(" ", 0, 200)] + "...").replace("\n\n", " ")
+                    data[0]["summary"] = str(data[0]["summary"][:str(
+                        data[0]["summary"]).rfind(" ", 0, 200)] + "...").replace("\n\n", " ")
                 except KeyError:
                     data[0]["summary"] = None
 
-                fixed_cover_url = str(items[1].json()[0]["url"]).replace("//", "https://").replace("t_thumb", "t_cover_big")
+                fixed_cover_url = str(items[1].json()[0]["url"]).replace(
+                    "//", "https://").replace("t_thumb", "t_cover_big")
                 data[0].update({"cover_url": fixed_cover_url})
 
                 try:
@@ -123,7 +126,8 @@ async def getGameData(games):
                         if dates["platform"] == game_platform and dates["region"] in region:
                             no_dates = True
                             try:
-                                data[0].update({"release_date": dates["date"], "human": dates["human"], "platform": dates["platform"]})
+                                data[0].update({"release_date": dates["date"],
+                                               "human": dates["human"], "platform": dates["platform"]})
                             except Exception:
                                 data[0].update({"release_date": "TBD", "human": "TBD", "platform": dates["platform"]})
                             data[0].pop("release_dates", None)
@@ -152,7 +156,7 @@ async def getGameData(games):
                 valid_games.append(game)
                 if first_run == True:
                     count += 1
-    
+
     return valid_games, count
 
 
@@ -187,7 +191,10 @@ async def checkGames(discord, released, show_all):
             checked_games_tba.append(game)
             continue
 
-        base_formatted_time = datetime.fromtimestamp(float(game["release_date"]))
+        if game["custom_date"] == True:
+            base_formatted_time = (datetime.strptime(game["release_date"], "%Y-%m-%d %H:%M:%S"))
+        else:
+            base_formatted_time = datetime.fromtimestamp(float(game["release_date"]))
 
         # setting timezone
         if timezone[1] == "-":
@@ -203,9 +210,11 @@ async def checkGames(discord, released, show_all):
 
             # datetime formatting
             if time_left.split(":")[0] == "0":
-                final_formatted_time = (datetime.strptime(time_left, "%H:%M:%S.%f")).strftime("+X%M Minutes!").replace("X0", "").replace("X", "")
+                final_formatted_time = (datetime.strptime(time_left, "%H:%M:%S.%f")).strftime(
+                    "+X%M Minutes!").replace("X0", "").replace("X", "")
             elif ":" in time_left.split(" ")[0]:
-                final_formatted_time = (datetime.strptime(time_left, "%H:%M:%S.%f")).strftime("+X%H Hours!").replace("X0", "").replace("X", "")
+                final_formatted_time = (datetime.strptime(time_left, "%H:%M:%S.%f")).strftime(
+                    "+X%H Hours!").replace("X0", "").replace("X", "")
             elif released == True:
                 final_formatted_time = f"+{time_left.split(' ')[0]} Days!"
             else:
@@ -224,7 +233,7 @@ async def checkGames(discord, released, show_all):
             csrin_embed = Embed(color=0x505050, title=f"CS.RIN.RU - {game['name']}", url=f"{cs_rin_url}")
             embeds.append(csrin_embed)
 
-            igdb_embed = Embed(color=0x9147ff, title=game["name"], url=game["url"] ,description=game["summary"])
+            igdb_embed = Embed(color=0x9147ff, title=game["name"], url=game["url"], description=game["summary"])
             igdb_embed.set_thumbnail(url=game["cover_url"])
             embeds.append(igdb_embed)
 
@@ -355,17 +364,22 @@ async def addGame(discord, id, platform, date, custom_date):
         database_game = cursor.fetchone()
 
         # calling game from igdb to get the name
-        
+
         try:
             game_data, count = asyncio.run(getGameData([id]))
         except Exception:
             await discord.send(f">>> Game does not exist!")
             print(f"Game does not exist!")
-        
+
+        if custom_date == True:
+            date = date
+        else:
+            date = game_data[0]["release_date"]
+
         for data in game_data:
             # if game does not exist game is added to the database
             if database_game == None:
-                cursor.execute("INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                cursor.execute("INSERT INTO games VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                (int(id), data["name"], data["summary"], date, custom_date, data["url"], data["cover_url"], platform, None))
                 connect.commit()
 
@@ -489,7 +503,7 @@ async def clear(interaction: discord.Interaction):
     previous_string = ""
     first_msg_sent = False
     for games in all_games_in_database:
-        if len(string) <= 2000:
+        if len(string) < 1990:
             count += 1
             previous_string = string
             if count % 2 == 0:
@@ -541,7 +555,7 @@ async def clear(interaction: discord.Interaction, id: int, platform: str = str(g
         if (any(character.isdigit() for character in datetime) and ":" in datetime and "-" in datetime and len(datetime) == 19) != True:
             await interaction.response.send_message(">>> Invalid datetime format use (YYYY-MM-DD HH:MM:SS)", ephemeral=True)
             return
-        
+
     custom_date = False
     if datetime != "0000-00-00 00:00:00":
         custom_date = True
@@ -569,9 +583,11 @@ async def clear(interaction: discord.Interaction, all_games: bool = False):
     await interaction.response.send_message(msg)
     asyncio.run(checkGames(interaction.channel, False, all_games))
 
+
 def updateLastCheckedDate(id, cursor, last_checked):
     game, count = asyncio.run(getGameData([id]))
     cursor.execute("UPDATE games Set last_checked = ? WHERE id = ?", (last_checked, game[0]["id"]))
+
 
 @tasks.loop(hours=24)
 async def updateGames():
@@ -585,7 +601,7 @@ async def updateGames():
     for game in all_games:
 
         if game["last_checked"] == None:
-            days_since_checked = 400 
+            days_since_checked = 400
         else:
             last_checked = datetime.fromtimestamp(float(game["last_checked"]))
             days_since_checked = last_checked.day-now.day
