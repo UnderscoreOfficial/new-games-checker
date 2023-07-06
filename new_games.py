@@ -230,12 +230,12 @@ async def checkGames(discord, released, show_all):
 
             embeds = []
 
-            csrin_embed = Embed(color=0x505050, title=f"CS.RIN.RU - {game['name']}", url=f"{cs_rin_url}")
-            embeds.append(csrin_embed)
-
             igdb_embed = Embed(color=0x9147ff, title=game["name"], url=game["url"], description=game["summary"])
             igdb_embed.set_thumbnail(url=game["cover_url"])
             embeds.append(igdb_embed)
+
+            csrin_embed = Embed(color=0x505050, title=f"CS.RIN.RU - {game['name']}", url=f"{cs_rin_url}")
+            embeds.append(csrin_embed)
 
             await discord.send(content=f">>> **{game['name']}** is out! :partying_face: T{final_formatted_time} ||{game['id']}||", embeds=embeds)
 
@@ -590,7 +590,7 @@ def updateLastCheckedDate(id, cursor, last_checked):
 
 
 @tasks.loop(hours=24)
-async def updateGames():
+async def updateGames(on_load=False):
     connect = sqlite3.connect("games.db")
     connect.row_factory = sqlite3.Row
     cursor = connect.cursor()
@@ -617,31 +617,40 @@ async def updateGames():
 
         print_msg = f"{game['name']} - {days} Days (Updated)"
 
-        if days < 0:
-            pass
-        elif days < 1 and days_since_checked >= 1:
-            print(print_msg)
-            updateLastCheckedDate(game["id"], cursor, now.timestamp())
-        elif days < 6 and days % 2 == 0 and days != 0 and days_since_checked >= 2:
-            print(print_msg)
-            updateLastCheckedDate(game["id"], cursor, now.timestamp())
-        elif days < 8 and days_since_checked >= 8:
-            print(print_msg)
-            updateLastCheckedDate(game["id"], cursor, now.timestamp())
-        elif days < 16 and days_since_checked >= 14:
-            print(print_msg)
-            updateLastCheckedDate(game["id"], cursor, now.timestamp())
-        elif days < 30 and days_since_checked >= 152:
-            print(print_msg)
-            updateLastCheckedDate(game["id"], cursor, now.timestamp())
-        elif days < 182 and days_since_checked >= 183:
-            print(print_msg)
-            updateLastCheckedDate(game["id"], cursor, now.timestamp())
-        elif days < 365 and game["last_checked"] == None or days < 365 and float(game["last_checked"]) != 946684800:
-            print(print_msg)
-            updateLastCheckedDate(game["id"], cursor, 946684800)
+        if on_load == False:
+            if days < 0:
+                pass
+            elif days < 1 and days_since_checked >= 1:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
+            elif days < 6 and days % 2 == 0 and days != 0 and days_since_checked >= 2:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
+            elif days < 8 and days_since_checked >= 8:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
+            elif days < 16 and days_since_checked >= 14:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
+            elif days < 30 and days_since_checked >= 152:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
+            elif days < 182 and days_since_checked >= 183:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
+            elif days < 365 and game["last_checked"] == None or days < 365 and float(game["last_checked"]) != 946684800:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, 946684800)
+        else:
+            if days < 365 and game["last_checked"] == None or days < 365 and float(game["last_checked"]) != 946684800:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, 946684800)
+            else:
+                print(print_msg)
+                updateLastCheckedDate(game["id"], cursor, now.timestamp())
 
     connect.commit()
     connect.close()
 
+asyncio.run(updateGames(True))
 bot.run(token)
